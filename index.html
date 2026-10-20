@@ -65,25 +65,35 @@
   .drawer table { border-collapse:collapse; width:100%; font-size:13px; margin:6px 0 10px; }
   .drawer th, .drawer td { border:1px solid var(--line); padding:4px 6px; text-align:left; vertical-align:top; }
   .gtmbar a { color:#93c5fd; }
+  .brand { cursor:pointer; }
+  #app.enter { animation:pwIn .3s ease; }
+  @keyframes pwIn { from { opacity:0; transform:translateY(4px); } }
+  @media (prefers-reduced-motion: reduce) { #app.enter { animation:none; } }
 </style>
 
 <script>
 /* ---------- Simulated Fullstory browser API (records calls; nothing is sent anywhere). Log survives page loads in this tab. ---------- */
 (function () {
   var KEY = 'pw3_fs_log';
-  var log = [];
-  try { log = JSON.parse(sessionStorage.getItem(KEY) || '[]'); } catch (e) { log = []; }
+  function load() { try { return JSON.parse(sessionStorage.getItem(KEY) || '[]'); } catch (e) { return []; } }
+  var log = load();
   var currentUid = null;
   try { currentUid = sessionStorage.getItem('pw3_fs_uid'); } catch (e) {}
   var listeners = [];
+  function sync() { var fresh = load(); if (fresh.length !== log.length) { log.length = 0; Array.prototype.push.apply(log, fresh); } }
   function save() { try { sessionStorage.setItem(KEY, JSON.stringify(log)); } catch (e) {} }
   function clone(x) { try { return JSON.parse(JSON.stringify(x)); } catch (e) { return String(x); } }
   function record(method, args, level, note) {
+    sync();
     var entry = { n: log.length + 1, time: new Date().toISOString().slice(11, 23), path: location.pathname + location.search, method: method, args: clone(args), level: level, note: note || '' };
     log.push(entry); save();
     listeners.forEach(function (fn) { try { fn(entry); } catch (e) {} });
   }
-  var pageNameSet = null;
+  /* Fullstory starts a new page whenever the URL changes, including in single-page apps */
+  var pageNameSet = null, pageUrl = location.pathname + location.search;
+  function urlCheck() { var h = location.pathname + location.search; if (h !== pageUrl) { pageUrl = h; pageNameSet = null; } }
+  ['pushState', 'replaceState'].forEach(function (k) { var orig = history[k]; history[k] = function () { var r = orig.apply(this, arguments); urlCheck(); return r; }; });
+  window.addEventListener('popstate', urlCheck);
   function FS(method, args) {
     if (typeof method !== 'string') { record(String(method), args, 'error', 'First argument must be a method name string, e.g. FS("trackEvent", {...}).'); return; }
     switch (method) {
@@ -115,50 +125,54 @@
   FS.event = legacy('event'); FS.identify = legacy('identify'); FS.setUserVars = legacy('setUserVars'); FS.setVars = legacy('setVars'); FS.anonymize = legacy('anonymize');
   window._fs_namespace = 'FS';
   window.FS = FS;
-  window.__fsSim = { log: log, onRecord: function (fn) { listeners.push(fn); }, clear: function () { log.length = 0; save(); currentUid = null; try { sessionStorage.removeItem('pw3_fs_uid'); } catch (e) {} } };
+  window.__fsSim = { log: log, sync: sync, onRecord: function (fn) { listeners.push(fn); }, clear: function () { log.length = 0; save(); currentUid = null; try { sessionStorage.removeItem('pw3_fs_uid'); } catch (e) {} } };
 })();
 
-/* ---------- Page data (trk) and the event-driven data layer, as engineering built them ---------- */
+/* ---------- Server-rendered page state, trk and data layer ---------- */
 (function () {
   var BASE = location.pathname.replace(/\/(index\.html|404\.html|search|listing\/\d+)?\/?$/, '');
   window.__pwBase = BASE;
   var rel = location.pathname.slice(BASE.length) || '/';
   var qs = new URLSearchParams(location.search);
-  var LISTINGS = {
-    '5048213001': { id: '5048213001', title: '2022 Northgate 26RB Travel Trailer', type: 'Travel Trailer', make: 'Northgate', price: 24500, priceText: '$24,500', dealerName: 'Lakeshore RV Center', phone: '(555) 014-2207',
-                    trk: { adid: '5048213001', make: 'Northgate' } },
-    '5051877002': { id: '5051877002', title: '2024 Brightfin 22 Pontoon', type: 'Pontoon Boat', make: 'Brightfin', price: null, priceText: '', dealerName: 'Harbor Point Marine', phone: '(555) 019-8841',
-                    trk: { adid: 5051877002 } },
-    '5050302003': { id: '5050302003', title: '2021 Ridgeway 31C Motorhome', type: 'Class C Motorhome', make: 'Ridgeway', price: 89900, priceText: '$89,900', dealerName: 'Lakeshore RV Center', phone: '(555) 014-2207',
-                    trk: { listingId: '5050302003', make: 'ridgeway' } }
+  var S = window.__PW_STATE__ = {
+    base: BASE,
+    pages: { home: ['home', 'Home'], search: ['search', 'Search Results'], detail: ['detail', 'Listing Detail'] },
+    counts: { '': 142, p: 57, n: 49, u: 93, pn: 18, pu: 39 },
+    listings: {
+      '5048213001': { id: '5048213001', title: '2022 Northgate 26RB Travel Trailer', type: 'Travel Trailer', make: 'Northgate', condition: 'used', price: 24500, priceText: '$24,500', dealerName: 'Lakeshore RV Center', phone: '(555) 014-2207',
+                      trk: { adid: '5048213001', make: 'Northgate' } },
+      '5051877002': { id: '5051877002', title: '2024 Brightfin 22 Pontoon', type: 'Pontoon Boat', make: 'Brightfin', condition: 'new', price: null, priceText: '', dealerName: 'Harbor Point Marine', phone: '(555) 019-8841',
+                      trk: { adid: 5051877002 } },
+      '5050302003': { id: '5050302003', title: '2021 Ridgeway 31C Motorhome', type: 'Class C Motorhome', make: 'Ridgeway', condition: 'used', price: 89900, priceText: '$89,900', dealerName: 'Lakeshore RV Center', phone: '(555) 014-2207',
+                      trk: { listingId: '5050302003', make: 'ridgeway' } }
+    }
   };
-  window.__pwListings = LISTINGS;
+  var LISTINGS = S.listings;
   window.dataLayer = window.dataLayer || [];
   var page = 'home', m, trk = { pagename: 'home', channel: 'find' };
   if (rel === '/search') {
     page = 'search';
-    trk = { pagename: 'search/results', channel: 'find', numresults: '142' };
+    var n = S.counts[(qs.get('price') ? 'p' : '') + (qs.get('condition') ? qs.get('condition').charAt(0) : '')];
+    trk = { pagename: 'search/results', channel: 'find', numresults: String(n) };
     window.srch = { keyword: qs.get('keyword') || 'trailer', condition: qs.get('condition') || '', pricerange: qs.get('price') || '' };
   } else if ((m = rel.match(/^\/listing\/(\d+)$/)) && LISTINGS[m[1]]) {
     page = 'detail';
     var l = LISTINGS[m[1]];
     trk = { pagename: 'detail', channel: 'find' };
     for (var k in l.trk) trk[k] = l.trk[k];
-    window.__pwListing = l;
   }
-  window.__pwPage = page;
   window.trk = trk;
 
-  var PAGES = { home: ['home', 'Home'], search: ['search', 'Search Results'], detail: ['detail', 'Listing Detail'] };
-  var pv = { event: 'page_view', page: { type: PAGES[page][0], name: PAGES[page][1] } };
+  var pv = { event: 'page_view', page: { type: S.pages[page][0], name: S.pages[page][1] } };
   if (page === 'detail') pv.listing = { id: '', make: '', price: '' };
   window.dataLayer.push(pv);
   if (page === 'search') {
-    window.dataLayer.push({ event: 'search', search: { term: window.srch.keyword, results: '142' } });
+    window.dataLayer.push({ event: 'search', search: { term: window.srch.keyword, results: String(n) } });
     if (qs.get('price')) window.dataLayer.push({ event: 'filter', filter: { name: 'price', value: qs.get('price') } });
     if (qs.get('condition')) window.dataLayer.push({ event: 'filter', filter: { name: 'condition', value: qs.get('condition') } });
   }
 })();
+
 
 /* ---------- GTM loader: the inherited container by default; ?gtm=GTM-XXXX loads yours for this tab instead ---------- */
 (function () {
@@ -206,15 +220,16 @@
   <button style="float:right" id="briefClose">Close</button>
   <h1 style="font-size:21px;margin-top:0">Take-home: audit and fix an inherited implementation</h1>
   <p>Pinewake Exchange is a fictional listings marketplace. A previous contractor set up its tracking: engineering added a data layer and <code>data-track</code> attributes, and the contractor built a GTM container that sends events to Fullstory. <b>That container is live on this site right now.</b> Every Fullstory call it makes shows in the call log at the bottom right, along with any errors Fullstory would give. The log is kept as you move between pages.</p>
+  <p>Like our real sites, some parts of Pinewake load a new page each time and some update in place without a reload.</p>
   <p>The business isn't confident in the data. We'd like your assessment and a plan to fix it.</p>
 
   <h2>What the tracking is supposed to do</h2>
   <table>
     <tr><th>Need</th><th>Details</th></tr>
     <tr><td>Page properties</td><td>Page name and page type on every page.</td></tr>
-    <tr><td>Search Completed</td><td>Keyword, and the number of results as a number.</td></tr>
+    <tr><td>Search Completed</td><td>Once per search, with the keyword and the number of results as a number.</td></tr>
     <tr><td>Filter Applied</td><td>Filter name and value, only when the visitor changes a filter.</td></tr>
-    <tr><td>Listing Viewed</td><td>Listing ID, make, and price as a number (none when there's no price).</td></tr>
+    <tr><td>Listing Viewed</td><td>Once each time a visitor views a listing, with the listing ID, make, and price as a number (none when there's no price).</td></tr>
     <tr><td>Phone Revealed</td><td>When the dealer phone is revealed on the main listing (not the similar-listings cards), with the listing ID.</td></tr>
     <tr><td>Lead Submitted</td><td>Only when the lead form is sent successfully, with the lead reference and listing ID.</td></tr>
     <tr><td>Privacy</td><td>No email addresses, phone numbers or other contact details in Fullstory.</td></tr>
@@ -239,95 +254,10 @@
 </aside>
 
 <script>
+/* ---------- Test harness: brief, GTM status and the call log ---------- */
 (function () {
-  var BASE = window.__pwBase, L = window.__pwListings, page = window.__pwPage;
-  var qs = new URLSearchParams(location.search);
-  var app = document.getElementById('app');
+  var BASE = window.__pwBase;
   function esc(s) { return String(s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
-  function go(url) { location.href = BASE + url; }
-  function phoneButton(attrs) { return '<button ' + attrs + '><span class="ico" aria-hidden="true">&#9742;</span> <span class="lbl">Show phone number</span></button>'; }
-
-  if (page === 'home') {
-    app.innerHTML = '<section class="hero"><h1>Find your next RV or boat</h1>' +
-      '<div class="searchrow"><input id="q" value="trailer" aria-label="Search"><button class="btn" id="go" data-track="btn1">Search</button></div>' +
-      '<p class="muted">Popular: travel trailers, pontoons, Class C motorhomes</p></section>';
-    document.getElementById('go').onclick = function () { go('/search?keyword=' + encodeURIComponent(document.getElementById('q').value.trim() || 'trailer')); };
-  }
-
-  if (page === 'search') {
-    var kw = window.srch.keyword;
-    var cards = ['5048213001', '5051877002', '5050302003'].map(function (id) {
-      var l = L[id];
-      return '<div class="card" data-id="' + id + '"><div><b>' + esc(l.title) + '</b><div class="muted">' + esc(l.type) + ' · ' + esc(l.dealerName) + '</div></div><div class="price">' + (l.priceText ? esc(l.priceText) : '<span class="muted" style="font-size:14px">Call for price</span>') + '</div></div>';
-    }).join('');
-    app.innerHTML = '<div class="grid"><aside class="panel"><b>Filters</b>' +
-      '<label style="display:block;margin-top:10px"><input type="checkbox" id="fPrice" data-track="srp|search-facets|checkbox|discovery|apply-filter"' + (qs.get('price') ? ' checked' : '') + '> Under $30,000</label>' +
-      '<label style="display:block;margin-top:10px">Condition<br><select id="fCond" data-track="filter-dropdown"><option value="">Any</option><option value="new">New</option><option value="used">Used</option></select></label></aside>' +
-      '<section><h2 style="margin-top:0">142 results for "' + esc(kw) + '"</h2>' + cards + '</section></div>';
-    document.getElementById('fCond').value = qs.get('condition') || '';
-    Array.prototype.forEach.call(app.querySelectorAll('.card'), function (c) { c.onclick = function () { go('/listing/' + c.getAttribute('data-id')); }; });
-    function refilter() {
-      var p = new URLSearchParams(); p.set('keyword', kw);
-      if (document.getElementById('fPrice').checked) p.set('price', '0-30000');
-      var c = document.getElementById('fCond').value; if (c) p.set('condition', c);
-      go('/search?' + p.toString());
-    }
-    document.getElementById('fPrice').onchange = refilter;
-    document.getElementById('fCond').onchange = refilter;
-  }
-
-  if (page === 'detail') {
-    var l = window.__pwListing;
-    var others = Object.keys(L).filter(function (k) { return k !== l.id; });
-    var sim = others.map(function (k) {
-      var o = L[k];
-      return '<div class="similar-card"><b>' + esc(o.title) + '</b><div class="muted">' + esc(o.dealerName) + '</div><div style="display:flex;gap:8px;margin-top:8px">' + phoneButton('class="mini" data-track="phone"') + '<a data-go="' + k + '">View</a></div><div class="muted mini-phone" style="display:none;margin-top:6px">' + esc(o.phone) + '</div></div>';
-    }).join('');
-    app.innerHTML = '<p><a id="bk">&larr; Back to results</a></p><div class="grid" style="grid-template-columns:1fr 320px">' +
-      '<section class="panel listing-main"><h1>' + esc(l.title) + '</h1><div class="price">' + (l.priceText ? esc(l.priceText) : 'Call for price') + '</div>' +
-      '<dl class="specs"><dt>Type</dt><dd>' + esc(l.type) + '</dd><dt>Make</dt><dd>' + esc(l.make) + '</dd><dt>Dealer</dt><dd>' + esc(l.dealerName) + '</dd></dl>' +
-      '<div style="display:flex;gap:8px;flex-wrap:wrap">' + phoneButton('class="btn"') + '<button class="btn secondary" data-track="Detail-Link-Save this Listing">Save</button></div></section>' +
-      '<aside class="panel"><b>Email the dealer</b><form id="lead" novalidate><label for="ln">Name</label><input id="ln"><label for="le">Email</label><input id="le" type="email"><label for="lm">Message</label><textarea id="lm" rows="3">Is this still available?</textarea>' +
-      '<button class="btn" style="margin-top:10px;width:100%" data-track="submit">Send</button><div id="leadBox"></div></form></aside></div>' +
-      '<h3>Similar listings</h3><div class="similar">' + sim + '</div>';
-    document.getElementById('bk').onclick = function () { go('/search?keyword=trailer'); };
-    var main = app.querySelector('.listing-main button');
-    main.onclick = function () { main.querySelector('.lbl').textContent = l.phone; };
-    Array.prototype.forEach.call(app.querySelectorAll('.similar-card'), function (card) {
-      card.querySelector('button').onclick = function () { card.querySelector('.mini-phone').style.display = 'block'; };
-      card.querySelector('[data-go]').onclick = function () { go('/listing/' + card.querySelector('[data-go]').getAttribute('data-go')); };
-    });
-
-    /* Listing details arrive from an "API" after the page has loaded, then the similar-listings carousel reports impressions */
-    setTimeout(function () {
-      window.dataLayer.push({ event: 'listingDetail', listing: { id: l.id, make: l.make, price: l.price === null ? 'Call for price' : l.price } });
-      setTimeout(function () {
-        others.forEach(function (k, i) { window.dataLayer.push({ event: 'impression', listing: { id: k, position: i + 1 } }); });
-      }, 300);
-    }, 700);
-
-    var leadCount = 0;
-    document.getElementById('lead').onsubmit = function (e) {
-      e.preventDefault();
-      window.dataLayer.push({ event: 'lead_submit', lead: { type: 'email' } });
-      var email = document.getElementById('le').value.trim();
-      var box = document.getElementById('leadBox');
-      box.innerHTML = '';
-      setTimeout(function () {
-        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { box.innerHTML = '<div class="msg err">Please enter a valid email address.</div>'; }
-        else {
-          leadCount += 1;
-          var ref = 'LD-' + (90416 + leadCount);
-          box.innerHTML = '<div class="msg ok">Thanks! Your reference number is ' + ref + '.</div>';
-          window.dataLayer.push({ lead: { status: 'sent', id: ref } });
-        }
-      }, 500);
-    };
-  }
-
-  document.getElementById('navHome').onclick = function () { go('/'); };
-
-  /* Harness */
   var drawer = document.getElementById('drawer');
   document.getElementById('briefBtn').onclick = function () { drawer.classList.add('open'); };
   document.getElementById('briefClose').onclick = function () { drawer.classList.remove('open'); };
@@ -344,17 +274,21 @@
     body.insertBefore(d, document.getElementById('copyArea'));
     body.scrollTop = body.scrollHeight;
   }
+  function redraw() { Array.prototype.forEach.call(body.querySelectorAll('.e'), function (n) { n.remove(); }); window.__fsSim.log.forEach(addEntry); }
   window.__fsSim.log.forEach(addEntry);
   window.__fsSim.onRecord(addEntry);
+  window.addEventListener('pageshow', function (e) { if (e.persisted) { window.__fsSim.sync(); redraw(); } });
   document.getElementById('logClear').onclick = function () { window.__fsSim.clear(); Array.prototype.forEach.call(body.querySelectorAll('.e'), function (n) { n.remove(); }); };
   document.getElementById('logToggle').onclick = function () { var c = body.classList.toggle('collapsed'); this.textContent = c ? 'Show' : 'Hide'; };
   document.getElementById('logCopy').onclick = function () {
-    var text = JSON.stringify({ build: 'PW-T1', gtm: window.__gtmId, calls: window.__fsSim.log }, null, 2);
+    window.__fsSim.sync();
+    var text = JSON.stringify({ build: 'PW-T2', gtm: window.__gtmId, calls: window.__fsSim.log }, null, 2);
     var ta = document.getElementById('copyArea');
     function fallback() { ta.style.display = 'block'; ta.value = text; ta.select(); }
     try { navigator.clipboard.writeText(text).then(function () { document.getElementById('logCopy').textContent = 'Copied'; }, fallback); } catch (e) { fallback(); }
   };
 })();
 </script>
+<script>(function(){var s=document.createElement("script");s.src=window.__pwBase+"/assets/app.d0fb48e6.js";document.body.appendChild(s);})();</script>
 </body>
 </html>
